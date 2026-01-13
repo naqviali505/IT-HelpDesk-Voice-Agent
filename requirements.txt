@@ -1,0 +1,5 @@
+pyaudio
+deepgram-sdk
+asyncio
+websockets
+json
