@@ -1,35 +1,72 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
+import { useState, useEffect } from 'react'
+import { RetellWebClient } from 'retell-client-js-sdk'
 import './App.css'
 
+// Initialize the client outside the component to prevent re-renders
+const retellWebClient = new RetellWebClient();
+
 function App() {
-  const [count, setCount] = useState(0)
+  const [isCalling, setIsCalling] = useState(false);
+
+  useEffect(() => {
+    // Listen for call end to reset button state
+    retellWebClient.on("call_ended", () => {
+      console.log("Call ended");
+      setIsCalling(false);
+    });
+
+    retellWebClient.on("error", (error) => {
+      console.error("Retell Error:", error);
+      setIsCalling(false);
+    });
+  }, []);
+
+  const toggleCall = async () => {
+    if (isCalling) {
+      retellWebClient.stopCall();
+      setIsCalling(false);
+      return;
+    }
+
+    try {
+      setIsCalling(true);
+      
+      // 1. Call YOUR backend (FastAPI) to get an access token
+      // Replace with your actual ngrok or server URL
+      const response = await fetch("https://c23b3eb564d2.ngrok-free.app/create-web-call", {
+        method: "POST",
+      });
+      const data = await response.json();
+      await retellWebClient.startCall({
+        accessToken: data.access_token,
+      });
+
+    } catch (error) {
+      console.error("Failed to start call:", error);
+      setIsCalling(false);
+    }
+  };
 
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
+    <div className="container">
+      <h1>IT Helpdesk Voice AI</h1>
+      
       <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
+        <button 
+          onClick={toggleCall} 
+          className={`call-button ${isCalling ? 'active' : ''}`}
+        >
+          {isCalling ? (
+            <span>Stop Call ⏹️</span>
+          ) : (
+            <span>Start IT Support Call 🎙️</span>
+          )}
         </button>
-        <p>
-          Edit <code>src/App.jsx</code> and save to test HMR
+        <p className={isCalling ? "active-status" : "status-text"}>
+          {isCalling ? "Agent is listening..." : "Click to speak with an IT Technician"}
         </p>
       </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
+    </div>
+  );
 }
-
-export default App
+export default App;

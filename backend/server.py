@@ -1,12 +1,17 @@
 import os
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from groq import AsyncGroq
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+from retell import Retell
 
+# 1. Setup & Config
 load_dotenv()
 app = FastAPI()
 client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
-IT_HELPDESK_PROMPT="""
+retell = Retell(api_key=os.getenv("RETELL_API_KEY"))
+# Your detailed instruction set
+IT_HELPDESK_PROMPT = """
 You are a knowledgeable IT Technician specializing in computer hardware and system configurations. 
 Your task is to provide accurate, clear, and practical solutions to user questions about hardware 
 components, system performance, troubleshooting, upgrades, and maintenance. Ask clarifying questions 
@@ -17,11 +22,27 @@ a meeting with a live IT agent at the next available appointment slot.
 Keep your messages brief and concise and ask relevant question to user regarding it.
 """
 
+# A tiny reminder prompt for subsequent turns to save tokens
+TINY_REMINDER = "You are the IT Technician. Continue troubleshooting briefly."
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 @app.websocket("/helpdesk/{call_id}")
 async def retell_llm_handler(websocket: WebSocket, call_id: str):
     await websocket.accept()
-    
-    # Send the first message (Agent speaks first)
+    print(f"Call {call_id} connected.")
+
+    # State tracking
+    is_initial_turn = True 
+
+    # 2. Initial Handshake: Agent speaks first
+    # This triggers the ElevenLabs voice in Retell immediately
     await websocket.send_json({
         "response_id": 0,
         "content": "Hello! I'm your IT Helpdesk Assistant. How can I help you today?",
@@ -30,37 +51,51 @@ async def retell_llm_handler(websocket: WebSocket, call_id: str):
 
     try:
         while True:
+            # Receive transcript data from Retell
             data = await websocket.receive_json()
             
-            # 2. Only respond if Retell explicitly requests a response
+            # 3. Handle 'response_required' event
             if data.get("interaction_type") == "response_required":
+                response_id = data.get("response_id")
                 transcript = data.get("transcript", [])
+
+                # Use the BIG prompt only once, then switch to the TINY reminder
+                active_prompt = IT_HELPDESK_PROMPT if is_initial_turn else TINY_REMINDER
                 
-                # 3. Call Groq (Streaming for speed)
+                # Call Groq with streaming enabled
                 stream = await client.chat.completions.create(
-                    messages=[{"role": "system", "content": IT_HELPDESK_PROMPT}] + transcript,
+                    messages=[{"role": "system", "content": active_prompt}] + transcript[-5:],
                     model="llama3-70b-8192",
-                    stream=True
+                    stream=True,
                 )
 
-                # 4. Stream text chunks back to Retell
-                full_response = ""
+                is_initial_turn = False
+
                 async for chunk in stream:
                     content = chunk.choices[0].delta.content or ""
                     if content:
-                        full_response += content
                         await websocket.send_json({
-                            "response_id": data["response_id"],
+                            "response_id": response_id,
                             "content": content,
                             "content_complete": False
                         })
                 
-                # Finalize the turn
+                # Signal that this specific turn is finished
                 await websocket.send_json({
-                    "response_id": data["response_id"],
+                    "response_id": response_id,
                     "content": "",
                     "content_complete": True
                 })
 
     except WebSocketDisconnect:
-        print(f"Call {call_id} ended.")
+        print(f"Call {call_id} disconnected.")
+    except Exception as e:
+        print(f"Error in call {call_id}: {e}")
+
+@app.post("/create-web-call")
+async def create_web_call():
+    # This creates a short-lived token for the frontend to use
+    web_call_response = retell.call.create_web_call(
+        agent_id="agent_959c3ec074022bde645b073b42"
+    )
+    return {"access_token": web_call_response.access_token}
