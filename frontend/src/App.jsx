@@ -9,7 +9,6 @@ function App() {
   const [isCalling, setIsCalling] = useState(false);
 
   useEffect(() => {
-    // Listen for call end to reset button state
     retellWebClient.on("call_ended", () => {
       console.log("Call ended");
       setIsCalling(false);
@@ -30,10 +29,7 @@ function App() {
 
     try {
       setIsCalling(true);
-      
-      // 1. Call YOUR backend (FastAPI) to get an access token
-      // Replace with your actual ngrok or server URL
-      const response = await fetch("https://c23b3eb564d2.ngrok-free.app/create-web-call", {
+      const response = await fetch("https://d454a0b2c16a.ngrok-free.app/create-web-call", {
         method: "POST",
       });
       const data = await response.json();

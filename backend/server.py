@@ -4,6 +4,7 @@ from groq import AsyncGroq
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from retell import Retell
+from memory import ChatMemory
 
 # 1. Setup & Config
 load_dotenv()
@@ -40,7 +41,7 @@ async def retell_llm_handler(websocket: WebSocket, call_id: str):
 
     # State tracking
     is_initial_turn = True 
-
+    chat_memory = ChatMemory(limit=6)
     # 2. Initial Handshake: Agent speaks first
     # This triggers the ElevenLabs voice in Retell immediately
     await websocket.send_json({
@@ -58,28 +59,32 @@ async def retell_llm_handler(websocket: WebSocket, call_id: str):
             if data.get("interaction_type") == "response_required":
                 response_id = data.get("response_id")
                 transcript = data.get("transcript", [])
-
-                # Use the BIG prompt only once, then switch to the TINY reminder
+                user_input = transcript[-1].get('content')
+                chat_memory.add_message("user", user_input)
                 active_prompt = IT_HELPDESK_PROMPT if is_initial_turn else TINY_REMINDER
                 
                 # Call Groq with streaming enabled
+
                 stream = await client.chat.completions.create(
-                    messages=[{"role": "system", "content": active_prompt}] + transcript[-5:],
-                    model="llama3-70b-8192",
+                    messages=[{"role": "system", "content": active_prompt}]+ chat_memory.get_messages(),
+                    model="llama-3.3-70b-versatile",
                     stream=True,
                 )
 
                 is_initial_turn = False
-
+                full_response_content = ""
                 async for chunk in stream:
                     content = chunk.choices[0].delta.content or ""
                     if content:
+                        full_response_content += content
+
                         await websocket.send_json({
                             "response_id": response_id,
                             "content": content,
                             "content_complete": False
                         })
-                
+
+                chat_memory.add_message("assistant", full_response_content)
                 # Signal that this specific turn is finished
                 await websocket.send_json({
                     "response_id": response_id,
