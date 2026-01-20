@@ -1,3 +1,4 @@
+import json
 import os
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from groq import AsyncGroq
@@ -5,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from retell import Retell
 from memory import ChatMemory
+from tools import create_google_meet_meeting
 
 # 1. Setup & Config
 load_dotenv()
@@ -21,6 +23,9 @@ level of technical expertise.
 If the user’s issue cannot be resolved through your guidance, politely inform them and help schedule 
 a meeting with a live IT agent at the next available appointment slot.
 Keep your messages brief and concise and ask relevant question to user regarding it.
+### ESCALATION POLICY ###
+1. ALWAYS attempt at least three troubleshooting steps for software or minor connectivity issues.
+2. If troubleshooting fails after three attempts, or if the user expresses high frustration, proceed to schedule a meeting.
 """
 
 # A tiny reminder prompt for subsequent turns to save tokens
@@ -33,6 +38,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "create_google_meet_meeting",
+            "description": "Schedule a Google Meet and send email invite when the customer wants to book a call with a technician.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string", "description": "Subject of the meeting"},
+                    "start_time_iso": {"type": "string", "description": "ISO 8601 format time"},
+                    "end_time_iso": {"type": "string", "description": "ISO 8601 format time"},
+                    "email": {"type": "string", "description": "Email to invite"}
+                },
+                "required": ["summary", "start_time_iso", "end_time_iso", "email"]
+            }
+        }
+    }
+]
 
 @app.websocket("/helpdesk/{call_id}")
 async def retell_llm_handler(websocket: WebSocket, call_id: str):
@@ -69,28 +94,61 @@ async def retell_llm_handler(websocket: WebSocket, call_id: str):
                     messages=[{"role": "system", "content": active_prompt}]+ chat_memory.get_messages(),
                     model="llama-3.3-70b-versatile",
                     stream=True,
+                    tools=tools,
+                    tool_choice="auto",
                 )
 
                 is_initial_turn = False
                 full_response_content = ""
+                tool_call_chunks = []
                 async for chunk in stream:
-                    content = chunk.choices[0].delta.content or ""
-                    if content:
-                        full_response_content += content
-
+                    delta = chunk.choices[0].delta
+                    
+                    # 1. Handle regular text response
+                    if delta.content:
+                        full_response_content += delta.content
                         await websocket.send_json({
                             "response_id": response_id,
-                            "content": content,
+                            "content": delta.content,
+                            "content_complete": False
+                        })
+                    
+                    # 2. Handle Tool Call (accumulate chunks)
+                    if delta.tool_calls:
+                        tool_call_chunks.append(delta.tool_calls[0])
+                if tool_call_chunks:
+                    # Stitch together the arguments (they arrive in pieces)
+                    fn_name = tool_call_chunks[0].function.name
+                    fn_args_str = "".join([c.function.arguments for c in tool_call_chunks if c.function.arguments])
+                    
+                    if fn_name == "create_google_meet_meeting":
+                        await websocket.send_json({
+                            "response_id": response_id,
+                            "content": "One moment while I set that meeting up for you...",
                             "content_complete": False
                         })
 
-                chat_memory.add_message("assistant", full_response_content)
-                # Signal that this specific turn is finished
-                await websocket.send_json({
-                    "response_id": response_id,
-                    "content": "",
-                    "content_complete": True
-                })
+                        # Execute the tool
+                        args = json.loads(fn_args_str)
+                        result = create_google_meet_meeting(**args)
+                        
+                        # Add tool results to memory and get a final response
+                        chat_memory.add_message("assistant", f"I've scheduled the meeting. Link: {result['meeting_link']}")
+                        
+                        # Let the user know it's done
+                        await websocket.send_json({
+                            "response_id": response_id,
+                            "content": f"All set! I've sent the invite. The Google Meet link is ready.",
+                            "content_complete": True
+                        })
+                else:
+                    chat_memory.add_message("assistant", full_response_content)
+                    # Signal that this specific turn is finished
+                    await websocket.send_json({
+                        "response_id": response_id,
+                        "content": "",
+                        "content_complete": True
+                    })
 
     except WebSocketDisconnect:
         print(f"Call {call_id} disconnected.")

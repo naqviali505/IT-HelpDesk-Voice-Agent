@@ -29,7 +29,8 @@ function App() {
 
     try {
       setIsCalling(true);
-      const response = await fetch("https://d454a0b2c16a.ngrok-free.app/create-web-call", {
+      const baseUrl = import.meta.env.VITE_NGROK_URL;
+      const response = await fetch(`${baseUrl}/create-web-call`,{
         method: "POST",
       });
       const data = await response.json();
@@ -44,25 +45,27 @@ function App() {
   };
 
   return (
-    <div className="container">
-      <h1>IT Helpdesk Voice AI</h1>
-      
-      <div className="card">
+  <div className="container">
+    <div className="card">
+      <h1>IT HELPDESK AI</h1>
+      <p style={{marginBottom: '2rem', textTransform: 'none', opacity: 0.6}}>
+        Instant hardware & system support
+      </p>
+
+      <div className="orb-container">
         <button 
           onClick={toggleCall} 
           className={`call-button ${isCalling ? 'active' : ''}`}
         >
-          {isCalling ? (
-            <span>Stop Call ⏹️</span>
-          ) : (
-            <span>Start IT Support Call 🎙️</span>
-          )}
+          {isCalling ? "⏹️" : "🎙️"}
         </button>
-        <p className={isCalling ? "active-status" : "status-text"}>
-          {isCalling ? "Agent is listening..." : "Click to speak with an IT Technician"}
-        </p>
       </div>
+
+      <p className={isCalling ? "active-status" : "status-text"}>
+        {isCalling ? "••• AGENT LISTENING •••" : "READY TO ASSIST"}
+      </p>
     </div>
-  );
+  </div>
+);
 }
 export default App;
