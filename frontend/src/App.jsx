@@ -45,7 +45,7 @@ function App() {
   return (
   <div className="container">
     <div className="card">
-      <h1>IT HELPDESK AI</h1>
+      <h1>Helpdesk Voice Assistant</h1>
       <p style={{marginBottom: '2rem', textTransform: 'none', opacity: 0.6}}>
         Instant hardware & system support
       </p>

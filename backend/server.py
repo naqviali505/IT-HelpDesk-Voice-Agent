@@ -1,12 +1,14 @@
 import json
 import os
+import uuid
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from groq import AsyncGroq
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from retell import Retell
 from memory import ChatMemory
-from tools import create_meeting
+from tools import create_meeting,check_availability
+from datetime import datetime
 
 # 1. Setup & Config
 load_dotenv()
@@ -14,13 +16,35 @@ app = FastAPI()
 client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
 retell = Retell(api_key=os.getenv("RETELL_API_KEY"))
 # Your detailed instruction set
-IT_HELPDESK_PROMPT = """
-You are a knowledgeable IT Technician specializing in computer hardware and system configurations. 
-Your task is to provide accurate, clear, and practical solutions to user questions about hardware 
-components, system performance, troubleshooting, upgrades, and maintenance. Ask clarifying questions 
-if needed, explain solutions step by step in simple language, and tailor your guidance to the user’s 
-level of technical expertise.If the user’s issue cannot be resolved through your guidance, politely inform them and help schedule 
-a meeting with a live IT agent at the next available appointment slot.Keep your messages brief and concise and ask relevant question to user regarding it. 
+now = datetime.now()
+current_date_str = now.strftime("%A, %B %d, %Y")
+
+IT_HELPDESK_PROMPT = f"""
+## ROLE
+You are a knowledgeable IT Technician specializing in hardware and system configurations. 
+our task is to provide accurate, clear, and practical solutions to user questions about hardware 
+components, system performance, troubleshooting,upgrades, and maintenance.
+
+## CURRENT CONTEXT
+- Today's Date: {current_date_str}
+- Technician Hours: 9:00 AM - 5:00 PM
+- Technician Lunch (RESERVED): 1:00 PM - 2:00 PM daily (Never book during this hour).
+
+## SCHEDULING WORKFLOW (MANDATORY)
+If a problem cannot be resolved and requires a technician visit, follow these steps exactly:
+
+1. **FIND SLOT**: Call 'check_availability'. This tool automatically searches for the first 30-minute gap within the next 7 days excluding Saturday and Sunday.
+2. **PROPOSE**: Using the tool's result, say: "I've checked the schedule. The first available time is [Day], [Date] at [Time]. Does that work for you?"
+3. **EMAIL CAPTURE**: Once they agree to a time, you MUST ask them to spell their email:
+   - "Great. To send the invite to the right place, could you please spell your email address for me?"
+4. **VERIFY**: Repeat the spelled email back (e.g., "I have that as n-a-m-e at gmail dot com, correct?").
+5. **BOOK**: Only after the email is verified, call 'create_meeting' using the exact ISO timestamps provided by the 'check_availability' tool.
+
+## RULES
+- Be conversational but concise.
+- Never guess availability; always call 'check_availability' first.
+- If the user rejects the first slot, ask them for their preferred date and call 'check_availability' again.
+- Always put the user's email in the meeting 'description' to ensure the invite goes through.
 """
 # A tiny reminder prompt for subsequent turns to save tokens
 TINY_REMINDER = "You are the IT Technician. Continue troubleshooting briefly."
@@ -37,15 +61,27 @@ tools = [
     {
         "type": "function",
         "function": {
+            "name": "check_availability",
+            "description": "Check the technician's busy slots for a specific date to find an available time between 9 AM and 5 PM.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "create_meeting",
-            "description": "Schedule a Google Meet and send email invite when the customer wants to book a call with a technician.",
+            "description": "Finalize the booking. ONLY call this after checking availability, confirming a time with the user, and asking the user to spell their email.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "summary": {"type": "string", "description": "Subject of the meeting"},
-                    "start_time_iso": {"type": "string", "description": "ISO 8601 format time"},
-                    "end_time_iso": {"type": "string", "description": "ISO 8601 format time"},
-                    "email": {"type": "string", "description": "Email to invite"}
+                    "summary": {"type": "string", "description": "Subject of the meeting (e.g., Internet Issue)"},
+                    "start_time_iso": {"type": "string", "description": "ISO 8601 format time (e.g., 2026-01-22T10:00:00Z)"},
+                    "end_time_iso": {"type": "string", "description": "ISO 8601 format time (usually 30 mins after start)"},
+                    "email": {"type": "string", "description": "The customer's email address"}
                 },
                 "required": ["summary", "start_time_iso", "end_time_iso", "email"]
             }
@@ -104,34 +140,45 @@ async def retell_llm_handler(websocket: WebSocket, call_id: str):
                     if delta.tool_calls:
                         tool_call_chunks.append(delta.tool_calls[0])
                 if tool_call_chunks:
-                    # Stitch together the arguments (they arrive in pieces)
-                    
+                    # 1. Stitch together arguments
                     fn_name = tool_call_chunks[0].function.name
                     fn_args_str = "".join([c.function.arguments for c in tool_call_chunks if c.function.arguments])
+                    args = json.loads(fn_args_str)
                     
-                    if fn_name == "create_meeting":
-                        # Execute the tool
-                        args = json.loads(fn_args_str)
+                    # 2. Add the assistant's "intent" to call the tool to memory
+                    # Required for Groq's conversational history to stay valid
+                    tool_call_id = tool_call_chunks[0].id if hasattr(tool_call_chunks[0], 'id') else "call_" + str(uuid.uuid4())
+                    chat_memory.add_message("assistant", None, tool_calls=[{
+                        "id": tool_call_id,
+                        "type": "function",
+                        "function": {"name": fn_name, "arguments": fn_args_str}
+                    }])
+
+                    # 3. Execute the appropriate tool
+                    if fn_name == "check_availability":
+                        result_data = check_availability(args.get("date_str"))
+                        msg_to_user = f"I've checked the schedule: {result_data}"
+                    
+                    elif fn_name == "create_meeting":
+                        # Ensure you've removed 'attendees' in your create_meeting function to avoid 403
                         result = create_meeting(**args)
-                        
-                        # Add tool results to memory and get a final response
-                        chat_memory.add_message("assistant", f"I've scheduled the meeting. Link: {result['meeting_link']}")
-                        
-                        # Let the user know it's done
-                        await websocket.send_json({
-                            "response_id": response_id,
-                            "content": f"All set! I've sent the invite. The Google Meet link is ready.",
-                            "content_complete": True
-                        })
-                else:
-                    chat_memory.add_message("assistant", full_response_content)
-                    # Signal that this specific turn is finished
+                        result_data = f"Success. Meeting Link: {result.get('meeting_link')}"
+                        msg_to_user = "All set! I've scheduled that and sent the invite to your email."
+
+                    # 4. Add the TOOL result to memory
+                    chat_memory.add_message(
+                        role="tool", 
+                        content=str(result_data), 
+                        tool_call_id=tool_call_id, 
+                        name=fn_name
+                    )
+
+                    # 5. Inform Retell to speak the confirmation
                     await websocket.send_json({
                         "response_id": response_id,
-                        "content": "",
+                        "content": msg_to_user,
                         "content_complete": True
                     })
-
     except WebSocketDisconnect:
         print(f"Call {call_id} disconnected.")
     except Exception as e:
