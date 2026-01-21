@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from retell import Retell
 from memory import ChatMemory
-from tools import create_google_meet_meeting
+from tools import create_meeting
 
 # 1. Setup & Config
 load_dotenv()
@@ -19,15 +19,9 @@ You are a knowledgeable IT Technician specializing in computer hardware and syst
 Your task is to provide accurate, clear, and practical solutions to user questions about hardware 
 components, system performance, troubleshooting, upgrades, and maintenance. Ask clarifying questions 
 if needed, explain solutions step by step in simple language, and tailor your guidance to the user’s 
-level of technical expertise.
-If the user’s issue cannot be resolved through your guidance, politely inform them and help schedule 
-a meeting with a live IT agent at the next available appointment slot.
-Keep your messages brief and concise and ask relevant question to user regarding it.
-### ESCALATION POLICY ###
-1. ALWAYS attempt at least three troubleshooting steps for software or minor connectivity issues.
-2. If troubleshooting fails after three attempts, or if the user expresses high frustration, proceed to schedule a meeting.
+level of technical expertise.If the user’s issue cannot be resolved through your guidance, politely inform them and help schedule 
+a meeting with a live IT agent at the next available appointment slot.Keep your messages brief and concise and ask relevant question to user regarding it. 
 """
-
 # A tiny reminder prompt for subsequent turns to save tokens
 TINY_REMINDER = "You are the IT Technician. Continue troubleshooting briefly."
 
@@ -43,7 +37,7 @@ tools = [
     {
         "type": "function",
         "function": {
-            "name": "create_google_meet_meeting",
+            "name": "create_meeting",
             "description": "Schedule a Google Meet and send email invite when the customer wants to book a call with a technician.",
             "parameters": {
                 "type": "object",
@@ -79,7 +73,6 @@ async def retell_llm_handler(websocket: WebSocket, call_id: str):
         while True:
             # Receive transcript data from Retell
             data = await websocket.receive_json()
-            
             # 3. Handle 'response_required' event
             if data.get("interaction_type") == "response_required":
                 response_id = data.get("response_id")
@@ -89,21 +82,15 @@ async def retell_llm_handler(websocket: WebSocket, call_id: str):
                 active_prompt = IT_HELPDESK_PROMPT if is_initial_turn else TINY_REMINDER
                 
                 # Call Groq with streaming enabled
-
+                print(chat_memory.get_messages())
                 stream = await client.chat.completions.create(
                     messages=[{"role": "system", "content": active_prompt}]+ chat_memory.get_messages(),
-                    model="llama-3.3-70b-versatile",
-                    stream=True,
-                    tools=tools,
-                    tool_choice="auto",
-                )
-
+                    model="llama-3.3-70b-versatile",stream=True,tools=tools,tool_choice="auto")
                 is_initial_turn = False
                 full_response_content = ""
                 tool_call_chunks = []
                 async for chunk in stream:
                     delta = chunk.choices[0].delta
-                    
                     # 1. Handle regular text response
                     if delta.content:
                         full_response_content += delta.content
@@ -118,19 +105,14 @@ async def retell_llm_handler(websocket: WebSocket, call_id: str):
                         tool_call_chunks.append(delta.tool_calls[0])
                 if tool_call_chunks:
                     # Stitch together the arguments (they arrive in pieces)
+                    
                     fn_name = tool_call_chunks[0].function.name
                     fn_args_str = "".join([c.function.arguments for c in tool_call_chunks if c.function.arguments])
                     
-                    if fn_name == "create_google_meet_meeting":
-                        await websocket.send_json({
-                            "response_id": response_id,
-                            "content": "One moment while I set that meeting up for you...",
-                            "content_complete": False
-                        })
-
+                    if fn_name == "create_meeting":
                         # Execute the tool
                         args = json.loads(fn_args_str)
-                        result = create_google_meet_meeting(**args)
+                        result = create_meeting(**args)
                         
                         # Add tool results to memory and get a final response
                         chat_memory.add_message("assistant", f"I've scheduled the meeting. Link: {result['meeting_link']}")

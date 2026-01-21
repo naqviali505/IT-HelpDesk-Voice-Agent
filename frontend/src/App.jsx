@@ -2,9 +2,7 @@ import { useState, useEffect } from 'react'
 import { RetellWebClient } from 'retell-client-js-sdk'
 import './App.css'
 
-// Initialize the client outside the component to prevent re-renders
 const retellWebClient = new RetellWebClient();
-
 function App() {
   const [isCalling, setIsCalling] = useState(false);
 
