@@ -1,0 +1,65 @@
+[33mcommit 1c6d653b4a646f783a91b90131067b6cda583fd9[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m
+Author: naqviali505 <naqviali505@gmail.com>
+Date:   Sun Jan 25 04:07:45 2026 +0500
+
+    Debugging Email Issues
+
+[33mcommit 2af4143a4bd56002b612069f21db97083b1fbba9[m
+Author: naqviali505 <naqviali505@gmail.com>
+Date:   Sat Jan 24 23:27:26 2026 +0500
+
+    Email Issue To Be Tested
+
+[33mcommit dbbd56b470e488ed6369422adedcbaae1f0176a5[m
+Author: naqviali505 <naqviali505@gmail.com>
+Date:   Fri Jan 23 00:38:54 2026 +0500
+
+    Updating codebase to allow barge in
+
+[33mcommit e17565bce9c515fdc4193114cdad5add3a4d7e3e[m
+Author: naqviali505 <naqviali505@gmail.com>
+Date:   Thu Jan 22 00:16:04 2026 +0500
+
+    Tool Method In Test and Prompt Updated
+
+[33mcommit 420dec0250cfd30e6c475262f7cc05ff25d6ecae[m
+Author: naqviali505 <naqviali505@gmail.com>
+Date:   Wed Jan 21 10:50:58 2026 +0500
+
+    Google Calendar Issue Pending
+
+[33mcommit a14c28fb92788842ad14ea1bdaa062d6145a4351[m
+Author: naqviali505 <naqviali505@gmail.com>
+Date:   Wed Jan 21 01:20:30 2026 +0500
+
+    Tool Function Testing Remaining
+
+[33mcommit 230116302a9af5f83a7d4000031b8c7f08ec6835[m
+Author: naqviali505 <naqviali505@gmail.com>
+Date:   Mon Jan 19 23:50:07 2026 +0500
+
+    Voice Agent. Need to fix it's UI and add tool functions
+
+[33mcommit c5954756980aee8c4ad097d69e756507bee3db18[m
+Author: naqviali505 <naqviali505@gmail.com>
+Date:   Thu Jan 15 23:40:07 2026 +0500
+
+    Voice Agent Socket Connection In Testing
+
+[33mcommit f9d11d01562e347ffdd3568b5053db073badf4c1[m
+Author: naqviali505 <naqviali505@gmail.com>
+Date:   Thu Jan 15 00:28:17 2026 +0500
+
+    Voice Agent Ready for Testing
+
+[33mcommit 199e46b87695c92a36f948bfdab409d788a26b1a[m
+Author: naqviali505 <naqviali505@gmail.com>
+Date:   Tue Jan 13 23:46:30 2026 +0500
+
+    Voice Agent Tool To Be Done
+
+[33mcommit 23d5bc35dd5c5cf2c3be2a46edaddc31d5c02e4c[m
+Author: naqviali505 <naqviali505@gmail.com>
+Date:   Tue Jan 13 22:58:10 2026 +0500
+
+    Voice Agent First Commit
