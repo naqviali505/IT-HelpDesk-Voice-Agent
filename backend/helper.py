@@ -2,13 +2,18 @@ import asyncio
 import json
 import uuid
 from fastapi import WebSocket
+from groq import AsyncGroq
+import requests
 from memory import ChatMemory
 from retell import Retell
 from datetime import datetime
+import os
+from tool_schema import tools
 
-retell = Retell(api_key=os.getenv("RETELL_API_KEY"))
+ZOOM_TOKEN_URL ="https://zoom.us/oauth/token"
 now = datetime.now()
 current_date_str = now.strftime("%A, %B %d, %Y")
+client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
 
 IT_HELPDESK_PROMPT = f"""
 ## ROLE
@@ -217,3 +222,15 @@ async def handle_tool_calls(
         "content": "",
         "content_complete": True
     })
+
+def get_zoom_access_token():
+    response = requests.post(
+        ZOOM_TOKEN_URL,
+        params={"grant_type": "account_credentials", "account_id": os.getenv("ZOOM_ACCOUNT_ID")},
+        auth=(os.getenv("ZOOM_CLIENT_ID"), os.getenv("ZOOM_CLIENT_SECRET")),
+    )
+    response.raise_for_status()
+    return response.json()["access_token"]
+
+def get_retell():
+    return Retell(api_key=os.getenv("RETELL_API_KEY"))
