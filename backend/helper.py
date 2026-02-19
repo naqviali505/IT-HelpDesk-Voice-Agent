@@ -3,18 +3,17 @@ import json
 import uuid
 from fastapi import WebSocket
 from groq import AsyncGroq
-import requests
 from memory import ChatMemory
 from retell import Retell
 from datetime import datetime
 import os
 from tool_schema import tools
-
-ZOOM_TOKEN_URL ="https://zoom.us/oauth/token"
+from tool_calls import check_availability,create_meeting
+from dotenv import load_dotenv
+load_dotenv()
 now = datetime.now()
 current_date_str = now.strftime("%A, %B %d, %Y")
 client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
-
 IT_HELPDESK_PROMPT = f"""
 ## ROLE
 You are a knowledgeable and concise IT Technician. Your goal is to troubleshoot hardware/system issues or schedule a technician visit if needed.
@@ -189,7 +188,20 @@ async def handle_tool_calls(
                 "content_complete": True
             })
             return
-        result = create_meeting(**args)
+        meeting_info = create_meeting(**args)
+        if meeting_info["status"] == "success":
+            print(f"Scheduled Zoom Meeting: {meeting_info['meeting_link']} (ID {meeting_info['meeting_id']})")
+#         service.events().insert(
+#     calendarId=CALENDAR_ID,
+#     body={
+#         "summary": summary,
+#         "start": {"dateTime": start_time_iso, "timeZone": "UTC"},
+#         "end": {"dateTime": end_time_iso, "timeZone": "UTC"},
+#         "attendees": [{"email": email}],
+#         "description": f"Zoom Link: {meeting_link}"
+#     }
+# ).execute()
+
 
     else:
         result = {"error": "Unknown tool"}
@@ -222,15 +234,6 @@ async def handle_tool_calls(
         "content": "",
         "content_complete": True
     })
-
-def get_zoom_access_token():
-    response = requests.post(
-        ZOOM_TOKEN_URL,
-        params={"grant_type": "account_credentials", "account_id": os.getenv("ZOOM_ACCOUNT_ID")},
-        auth=(os.getenv("ZOOM_CLIENT_ID"), os.getenv("ZOOM_CLIENT_SECRET")),
-    )
-    response.raise_for_status()
-    return response.json()["access_token"]
 
 def get_retell():
     return Retell(api_key=os.getenv("RETELL_API_KEY"))

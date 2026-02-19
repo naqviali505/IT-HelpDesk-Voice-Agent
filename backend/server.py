@@ -3,8 +3,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from memory import ChatMemory
-from tools import create_meeting
-from helper import cancel_active_response,handle_tool_calls,run_llm_response,get_retell
+from helper import cancel_active_response,run_llm_response,get_retell
 load_dotenv()
 app = FastAPI()
 
