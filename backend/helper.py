@@ -71,13 +71,8 @@ async def cancel_active_response(
     state["active_response_id"] = None
     state["active_stream_task"] = None
 
-async def run_llm_response(
-    websocket: WebSocket,
-    response_id: int,
-    user_input: str,
-    state: dict,
-    chat_memory: ChatMemory
-):
+async def run_llm_response(websocket: WebSocket,response_id: int,user_input: str,state: dict,
+                           chat_memory: ChatMemory):
     """
     Streams LLM output and detects tool calls.
     """
@@ -120,15 +115,9 @@ async def run_llm_response(
 
         state["assistant_speaking"] = False
         state["active_response_id"] = None
-
+        print("About to handle tool calls")
         if tool_call_chunks:
-            await handle_tool_calls(
-                websocket,
-                response_id,
-                tool_call_chunks,
-                active_prompt,
-                chat_memory
-            )
+            await handle_tool_calls(websocket,response_id,tool_call_chunks,active_prompt,chat_memory)
 
     except asyncio.CancelledError:
         print("🛑 LLM stream cancelled cleanly")
@@ -140,16 +129,12 @@ async def run_llm_response(
         state["assistant_speaking"] = False
         state["active_response_id"] = None
 
-async def handle_tool_calls(
-    websocket: WebSocket,
-    response_id: int,
-    tool_call_chunks: list,
-    active_prompt: str,
-    chat_memory: ChatMemory
-):
+async def handle_tool_calls(websocket: WebSocket,response_id: int,tool_call_chunks: list,active_prompt: str,
+                            chat_memory: ChatMemory):
     """
     Executes tools and streams follow-up LLM response.
     """
+    print("In handle_tool_calls")
     tool_call = tool_call_chunks[0]
     fn_name = tool_call.function.name
     fn_args_str = "".join(
@@ -159,9 +144,7 @@ async def handle_tool_calls(
     args = json.loads(fn_args_str) if fn_args_str else {}
     tool_call_id = getattr(tool_call, "id", f"call_{uuid.uuid4()}")
 
-    chat_memory.add_message(
-        "assistant",
-        None,
+    chat_memory.add_message("assistant",None,
         tool_calls=[{
             "id": tool_call_id,
             "type": "function",

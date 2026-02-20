@@ -1,10 +1,13 @@
 import requests
 from datetime import datetime, timedelta, time, timezone
 from google.oauth2 import service_account
+import os
 from googleapiclient.discovery import build
 ZOOM_API_BASE = "https://api.zoom.us/v2"
 ZOOM_TOKEN_URL ="https://zoom.us/oauth/token"
-
+SCOPES = ['https://www.googleapis.com/auth/calendar']
+SERVICE_ACCOUNT_FILE = r'C:\Users\smali\Desktop\Langchain\google_service_account.json'
+CALENDAR_ID = 'primary'
 def create_meeting(summary, start_time_iso, end_time_iso, email):
     """
     Creates a Zoom meeting and returns the join link.
@@ -44,7 +47,7 @@ def create_meeting(summary, start_time_iso, end_time_iso, email):
 
         response.raise_for_status()
         meeting = response.json()
-
+        print(meeting)
         return {
             "status": "success",
             "meeting_link": meeting["join_url"],
@@ -55,18 +58,12 @@ def create_meeting(summary, start_time_iso, end_time_iso, email):
         print(f"Error creating Zoom meeting: {e}")
         return {"status": "error", "message": str(e)}
 
-SCOPES = ['https://www.googleapis.com/auth/calendar']
-SERVICE_ACCOUNT_FILE = 'google_service_account.json'
-CALENDAR_ID = 'primary'
-
-
 def get_calendar_service():
     creds = service_account.Credentials.from_service_account_file(
         SERVICE_ACCOUNT_FILE,
         scopes=SCOPES
     )
     return build('calendar', 'v3', credentials=creds)
-
 
 def get_busy_times():
     service = get_calendar_service()
