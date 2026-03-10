@@ -3,8 +3,6 @@ from datetime import datetime, timedelta, time, timezone
 from google.oauth2 import service_account
 import os
 from googleapiclient.discovery import build
-ZOOM_API_BASE = "https://api.zoom.us/v2"
-ZOOM_TOKEN_URL ="https://zoom.us/oauth/token"
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 SERVICE_ACCOUNT_FILE = r'C:\Users\smali\Desktop\Langchain\google_service_account.json'
 CALENDAR_ID = 'primary'
@@ -89,7 +87,6 @@ def check_availability():
     """
 
     busy_times = get_busy_times()
-
     busy_ranges = [
         (
             datetime.fromisoformat(b['start']),
@@ -102,12 +99,10 @@ def check_availability():
 
     for day_offset in range(7):
         day = now + timedelta(days=day_offset)
-
         if day.weekday() > 4:  # Skip weekends
             continue
 
         for hour in range(9, 17):
-
             if hour == 13:  # Skip lunch
                 continue
 
@@ -138,9 +133,9 @@ def check_availability():
                 }
 
     return {"error": "No available slots found in next 7 days."}
+
 def get_zoom_access_token():
-    response = requests.post(
-        ZOOM_TOKEN_URL,
+    response = requests.post("https://zoom.us/oauth/token",
         params={"grant_type": "account_credentials", "account_id": os.getenv("ZOOM_ACCOUNT_ID")},
         auth=(os.getenv("ZOOM_CLIENT_ID"), os.getenv("ZOOM_CLIENT_SECRET")),
     )

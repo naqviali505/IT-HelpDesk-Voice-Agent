@@ -134,16 +134,11 @@ async def handle_tool_calls(websocket: WebSocket,response_id: int,tool_call_chun
     """
     Executes tools and streams follow-up LLM response.
     """
-    print("In handle_tool_calls")
     tool_call = tool_call_chunks[0]
     fn_name = tool_call.function.name
-    fn_args_str = "".join(
-        c.function.arguments for c in tool_call_chunks if c.function.arguments
-    )
-
+    fn_args_str = "".join(c.function.arguments for c in tool_call_chunks if c.function.arguments)
     args = json.loads(fn_args_str) if fn_args_str else {}
     tool_call_id = getattr(tool_call, "id", f"call_{uuid.uuid4()}")
-
     chat_memory.add_message("assistant",None,
         tool_calls=[{
             "id": tool_call_id,
@@ -184,7 +179,6 @@ async def handle_tool_calls(websocket: WebSocket,response_id: int,tool_call_chun
 #         "description": f"Zoom Link: {meeting_link}"
 #     }
 # ).execute()
-
 
     else:
         result = {"error": "Unknown tool"}
