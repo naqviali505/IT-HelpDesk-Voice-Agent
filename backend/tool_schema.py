@@ -21,7 +21,9 @@ tools = [
                     "summary": {"type": "string"},
                     "start_time_iso": {"type": "string"},
                     "end_time_iso": {"type": "string"},
-                    "email": {"type": "string"}
+                    "email": {
+                        "type": "string",
+                        "description": "User provided email address spelled by the user. This email must come from the user. Never generate placeholder emails."}
                 },
                 "required": ["summary", "start_time_iso", "end_time_iso", "email"]
             }

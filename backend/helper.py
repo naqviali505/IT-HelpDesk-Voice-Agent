@@ -1,6 +1,7 @@
 import asyncio
 import json
 import uuid
+import logging
 from fastapi import WebSocket
 from groq import AsyncGroq
 from memory import ChatMemory
@@ -10,6 +11,12 @@ import os
 from tool_schema import tools
 from tool_calls import check_availability,create_meeting
 from dotenv import load_dotenv
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+)
+logger = logging.getLogger(__name__)
+
 load_dotenv()
 now = datetime.now()
 current_date_str = now.strftime("%A, %B %d, %Y")
@@ -47,8 +54,6 @@ You must complete each phase in order. Never skip to Phase 3 before Phase 2.
 - Be conversational but keep responses under 20 words.
 - Always put the user's email in the meeting 'description'.
 """
-# A tiny reminder prompt for subsequent turns to save tokens
-TINY_REMINDER = "You are the IT Technician. Continue troubleshooting briefly."
 
 async def cancel_active_response(
     websocket: WebSocket,
@@ -58,7 +63,7 @@ async def cancel_active_response(
     Cancels any active assistant speech + LLM stream.
     """
     if state["assistant_speaking"] and state["active_response_id"]:
-        print("🔴 Barge-in detected → cancelling assistant response")
+        logger.info("🔴 Barge-in detected → cancelling assistant response")
         await websocket.send_json({
             "type": "response_cancel",
             "response_id": state["active_response_id"]
@@ -71,27 +76,21 @@ async def cancel_active_response(
     state["active_response_id"] = None
     state["active_stream_task"] = None
 
-async def run_llm_response(websocket: WebSocket,response_id: int,user_input: str,state: dict,
-                           chat_memory: ChatMemory):
+async def run_llm_response(websocket: WebSocket,response_id: int,user_input: str,state: dict,chat_memory: ChatMemory):
     """
     Streams LLM output and detects tool calls.
     """
     state["assistant_speaking"] = True
     state["active_response_id"] = response_id
 
-    active_prompt = IT_HELPDESK_PROMPT if state["is_initial_turn"] else TINY_REMINDER
+    active_prompt = IT_HELPDESK_PROMPT
     state["is_initial_turn"] = False
-
     chat_memory.add_message("user", user_input)
 
     try:
         stream = await client.chat.completions.create(
             messages=[{"role": "system", "content": active_prompt}] + chat_memory.get_messages(),
-            model="llama-3.3-70b-versatile",
-            stream=True,
-            tools=tools,
-            tool_choice="auto"
-        )
+            model="llama-3.3-70b-versatile",stream=True,tools=tools,tool_choice="auto")
 
         full_response = ""
         tool_call_chunks = []
@@ -115,102 +114,106 @@ async def run_llm_response(websocket: WebSocket,response_id: int,user_input: str
 
         state["assistant_speaking"] = False
         state["active_response_id"] = None
-        print("About to handle tool calls")
         if tool_call_chunks:
             await handle_tool_calls(websocket,response_id,tool_call_chunks,active_prompt,chat_memory)
 
     except asyncio.CancelledError:
-        print("🛑 LLM stream cancelled cleanly")
+        logger.warning("🛑 LLM stream cancelled cleanly")
 
     except Exception as e:
-        print(f"LLM error: {e}")
+        logger.error(f"LLM error: {e}")
 
     finally:
         state["assistant_speaking"] = False
         state["active_response_id"] = None
 
-async def handle_tool_calls(websocket: WebSocket,response_id: int,tool_call_chunks: list,active_prompt: str,
-                            chat_memory: ChatMemory):
+async def handle_tool_calls(websocket: WebSocket,response_id: int,tool_call_chunks: list,active_prompt: str,chat_memory: ChatMemory):
     """
     Executes tools and streams follow-up LLM response.
     """
-    tool_call = tool_call_chunks[0]
-    fn_name = tool_call.function.name
-    fn_args_str = "".join(c.function.arguments for c in tool_call_chunks if c.function.arguments)
-    args = json.loads(fn_args_str) if fn_args_str else {}
-    tool_call_id = getattr(tool_call, "id", f"call_{uuid.uuid4()}")
-    chat_memory.add_message("assistant",None,
-        tool_calls=[{
-            "id": tool_call_id,
-            "type": "function",
-            "function": {"name": fn_name, "arguments": fn_args_str}
-        }]
-    )
+    try:
+        logger.info("Tool Call Chunks "+str(tool_call_chunks))
+        tool_call = tool_call_chunks[0]
+        fn_name = tool_call.function.name
+        fn_args_str = "".join(c.function.arguments for c in tool_call_chunks if c.function.arguments)
+        args = json.loads(fn_args_str) if fn_args_str else {}
+        tool_call_id = getattr(tool_call, "id", f"call_{uuid.uuid4()}")
+        chat_memory.add_message("assistant",None,tool_calls=[{
+                "id": tool_call_id,
+                "type": "function",
+                "function": {"name": fn_name, "arguments": fn_args_str}
+            }])
 
-    # ---- Execute tool ----
-    if fn_name == "check_availability":
-        result = check_availability()
+        if fn_name == "check_availability":
+            logger.info("Executing tool: check_availability")
+            result = check_availability()
+            logger.info("Availability result: %s", result)
 
-    elif fn_name == "create_meeting":
-        email = args.get("email", "").strip()
-        if not email or "@" not in email:
-            chat_memory.add_message(
-                role="tool",
-                content="Error: Missing or invalid email.",
-                tool_call_id=tool_call_id,
-                name=fn_name
-            )
-            await websocket.send_json({
-                "response_id": response_id,
-                "content": "Could you please spell your email address for me?",
-                "content_complete": True
-            })
-            return
-        meeting_info = create_meeting(**args)
-        if meeting_info["status"] == "success":
-            print(f"Scheduled Zoom Meeting: {meeting_info['meeting_link']} (ID {meeting_info['meeting_id']})")
-#         service.events().insert(
-#     calendarId=CALENDAR_ID,
-#     body={
-#         "summary": summary,
-#         "start": {"dateTime": start_time_iso, "timeZone": "UTC"},
-#         "end": {"dateTime": end_time_iso, "timeZone": "UTC"},
-#         "attendees": [{"email": email}],
-#         "description": f"Zoom Link: {meeting_link}"
-#     }
-# ).execute()
+        elif fn_name == "create_meeting":
+            logger.info("Executing tool: create_meeting")
+            email = args.get("email", "").strip()
+            if not email or "@" not in email:
+                logger.warning("Invalid or missing email provided: %s", email)
+                chat_memory.add_message(role="tool",content="Error: Missing or invalid email.",
+                    tool_call_id=tool_call_id,name=fn_name)
 
-    else:
-        result = {"error": "Unknown tool"}
+                await websocket.send_json({
+                    "response_id": response_id,
+                    "content": "Could you please spell your email address for me?",
+                    "content_complete": True
+                })
+                return
 
-    chat_memory.add_message(
-        role="tool",
-        content=json.dumps(result),
-        tool_call_id=tool_call_id,
-        name=fn_name
-    )
+            logger.info("Creating meeting for email: %s", email)
+            meeting_info = create_meeting(**args)
+            logger.debug("Meeting creation response: %s", meeting_info)
+            if meeting_info["status"] == "success":
+                logger.info(
+                    "Zoom meeting scheduled | meeting_id=%s | link=%s",
+                    meeting_info["meeting_id"],
+                    meeting_info["meeting_link"]
+                )
 
-    # ---- Follow-up LLM response ----
-    followup_stream = await client.chat.completions.create(
-        messages=[{"role": "system", "content": active_prompt}] + chat_memory.get_messages(),
-        model="llama-3.3-70b-versatile",
-        stream=True
-    )
+            result = meeting_info
 
-    async for chunk in followup_stream:
-        delta = chunk.choices[0].delta
-        if delta.content:
-            await websocket.send_json({
-                "response_id": response_id,
-                "content": delta.content,
-                "content_complete": False
-            })
+        else:
+            logger.error("Unknown tool requested: %s", fn_name)
+            result = {"error": "Unknown tool"}
 
-    await websocket.send_json({
-        "response_id": response_id,
-        "content": "",
-        "content_complete": True
-    })
+        chat_memory.add_message(role="tool",content=json.dumps(result),tool_call_id=tool_call_id,name=fn_name)
+        logger.debug("Tool result added to chat memory")
+        logger.info("Starting follow-up LLM streaming response")
+
+        followup_stream = await client.chat.completions.create(
+            messages=[{"role": "system", "content": active_prompt}] + chat_memory.get_messages(),
+            model="llama-3.3-70b-versatile",
+            stream=True
+        )
+
+        async for chunk in followup_stream:
+            delta = chunk.choices[0].delta
+            if delta.content:
+                await websocket.send_json({
+                    "response_id": response_id,
+                    "content": delta.content,
+                    "content_complete": False
+                })
+
+        logger.info("LLM streaming completed")
+
+        await websocket.send_json({
+            "response_id": response_id,
+            "content": "",
+            "content_complete": True
+        })
+
+    except Exception as e:
+        logger.exception("Error while handling tool call: %s", str(e))
+        await websocket.send_json({
+            "response_id": response_id,
+            "content": "Sorry, something went wrong while processing your request.",
+            "content_complete": True
+        })
 
 def get_retell():
     return Retell(api_key=os.getenv("RETELL_API_KEY"))

@@ -3,16 +3,23 @@ from datetime import datetime, timedelta, time, timezone
 from google.oauth2 import service_account
 import os
 from googleapiclient.discovery import build
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+)
+logger = logging.getLogger(__name__)
+
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 SERVICE_ACCOUNT_FILE = r'C:\Users\smali\Desktop\Langchain\google_service_account.json'
 CALENDAR_ID = 'primary'
+
 def create_meeting(summary, start_time_iso, end_time_iso, email):
     """
     Creates a Zoom meeting and returns the join link.
     """
     try:
         access_token = get_zoom_access_token()
-
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json"
@@ -36,24 +43,26 @@ def create_meeting(summary, start_time_iso, end_time_iso, email):
                 "meeting_authentication": False
             }
         }
-
         response = requests.post(
-            f"{ZOOM_API_BASE}/users/me/meetings",
+            f"https://api.zoom.us/v2/users/me/meetings",
             headers=headers,
             json=payload
         )
-
         response.raise_for_status()
         meeting = response.json()
-        print(meeting)
         return {
             "status": "success",
             "meeting_link": meeting["join_url"],
-            "meeting_id": meeting["id"]
+            "meeting_id": meeting["id"],
+            "host_email":meeting["host_email"],
+            "topic":meeting["topic"],
+            "start-time":meeting["start_time"],
+            "duration":meeting["duration"],
+            "agenda":meeting["agenda"]
         }
 
     except Exception as e:
-        print(f"Error creating Zoom meeting: {e}")
+        logger.error(f"Error creating Zoom meeting: {e}")
         return {"status": "error", "message": str(e)}
 
 def get_calendar_service():

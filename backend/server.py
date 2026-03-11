@@ -1,10 +1,16 @@
 import asyncio
+import logging
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from memory import ChatMemory
 from helper import cancel_active_response,run_llm_response,get_retell
 load_dotenv()
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+)
+logger = logging.getLogger(__name__)
 app = FastAPI()
 
 app.add_middleware(
@@ -19,7 +25,7 @@ app.add_middleware(
 @app.websocket("/helpdesk/{call_id}")
 async def retell_llm_handler(websocket: WebSocket, call_id: str):
     await websocket.accept()
-    print(f"Call {call_id} connected.")
+    logger.info(f"Call {call_id} connected.")
 
     chat_memory = ChatMemory(limit=6)
 
@@ -44,25 +50,14 @@ async def retell_llm_handler(websocket: WebSocket, call_id: str):
                 transcript = data.get("transcript", [])
                 user_input = transcript[-1]["content"]
                 response_id = data["response_id"]
-
-                print(f"User: {user_input}")
-
+                logger.info(f"User: {user_input}")
                 await cancel_active_response(websocket, state)
-
-                state["active_stream_task"] = asyncio.create_task(
-                    run_llm_response(
-                        websocket,
-                        response_id,
-                        user_input,
-                        state,
-                        chat_memory
-                    )
-                )
+                state["active_stream_task"] = asyncio.create_task(run_llm_response(websocket,response_id,user_input,state,chat_memory))
 
     except WebSocketDisconnect:
-        print(f"Call {call_id} disconnected.")
+        logger.info(f"Call {call_id} disconnected.")
     except Exception as e:
-        print(f"Error in call {call_id}: {e}")
+        logger.error(f"Error in call {call_id}: {e}")
 
 
 @app.post("/create-web-call")

@@ -9,7 +9,6 @@ class ChatMemory:
         
         # Add any extra fields (like tool_calls or tool_call_id)
         message.update(kwargs)
-        
         self.history.append(message)
         
         # Keep only the most recent messages
