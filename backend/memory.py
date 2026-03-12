@@ -4,16 +4,22 @@ class ChatMemory:
         self.limit = limit
 
     def add_message(self, role, content=None, **kwargs):
-        # Build the message dictionary dynamically
+
+        if content is None and role != "assistant":
+            content = ""
+
         message = {"role": role, "content": content}
-        
-        # Add any extra fields (like tool_calls or tool_call_id)
         message.update(kwargs)
         self.history.append(message)
         
         # Keep only the most recent messages
-        if len(self.history) > self.limit:
-            self.history.pop(0)
+        while len(self.history) > self.limit:
+            removed = self.history.pop(0)
+
+            # If we removed a tool message, remove the next one too
+            if removed.get("role") == "assistant" and removed.get("tool_calls"):
+                if self.history and self.history[0].get("role") == "tool":
+                    self.history.pop(0)
 
     def get_messages(self):
-        return self.history
+        return list(self.history)

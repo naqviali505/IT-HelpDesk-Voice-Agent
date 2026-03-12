@@ -26,14 +26,18 @@ app.add_middleware(
 async def retell_llm_handler(websocket: WebSocket, call_id: str):
     await websocket.accept()
     logger.info(f"Call {call_id} connected.")
-
-    chat_memory = ChatMemory(limit=6)
-
+    chat_memory = ChatMemory(limit=20)
     state = {
-        "assistant_speaking": False,
-        "active_response_id": None,
-        "active_stream_task": None,
-        "is_initial_turn": True
+    "assistant_speaking": False,
+    "active_response_id": None,
+    "active_stream_task": None,
+    "is_initial_turn": True,
+    "last_user_input": None,
+    "phase": "diagnosis",
+    "proposed_slot": None,
+    "user_email": None,
+    "email_verified": False,
+    "meeting_scheduled": False
     }
 
     await websocket.send_json({
@@ -41,19 +45,35 @@ async def retell_llm_handler(websocket: WebSocket, call_id: str):
         "content": "Hello! I'm your IT Helpdesk Assistant. How can I help you today?",
         "content_complete": True
     })
-
     try:
         while True:
             data = await websocket.receive_json()
-
             if data.get("interaction_type") == "response_required":
                 transcript = data.get("transcript", [])
-                user_input = transcript[-1]["content"]
+                if not transcript:
+                    continue
+
+                user_input = transcript[-1]["content"].strip()
+                if user_input == state["last_user_input"] or not user_input:
+                    continue
+
+                state["last_user_input"] = user_input
+                if state["meeting_scheduled"]:
+                    logger.info("Meeting already scheduled. Ignoring further scheduling.")
+                
                 response_id = data["response_id"]
                 logger.info(f"User: {user_input}")
                 await cancel_active_response(websocket, state)
-                state["active_stream_task"] = asyncio.create_task(run_llm_response(websocket,response_id,user_input,state,chat_memory))
-
+                if state["phase"] == "slot_proposed":
+                    # Check if user rejects the proposed slot
+                    if any(neg in user_input.lower() for neg in ["no", "not", "later", "different", "another"]):
+                        logger.info("User wants to reschedule → flipping phase to 'reschedule'")
+                        state["phase"] = "reschedule"
+                        state["proposed_slot"] = None
+                
+                task = asyncio.create_task(run_llm_response(websocket, response_id, user_input, state, chat_memory))
+                state["active_stream_task"] = task
+                task.add_done_callback(lambda _: state.update({"active_stream_task": None}))
     except WebSocketDisconnect:
         logger.info(f"Call {call_id} disconnected.")
     except Exception as e:

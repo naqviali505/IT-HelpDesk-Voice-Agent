@@ -7,6 +7,7 @@ tools = [
             "parameters": {
                 "type": "object",
                 "properties": {},
+                "additionalProperties": False
             }
         }
     },
@@ -14,18 +15,25 @@ tools = [
         "type": "function",
         "function": {
             "name": "create_meeting",
-            "description": "Finalize the booking. ONLY call this after checking availability, confirming time, and verifying email.",
+            "description": (
+                "Schedule the technician meeting. "
+                "ONLY call this after the user confirms the time slot and verifies their email. "
+                "Never guess an email address."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "summary": {"type": "string"},
-                    "start_time_iso": {"type": "string"},
-                    "end_time_iso": {"type": "string"},
+                    "summary": {
+                        "type": "string",
+                        "description": "Short meeting title"
+                    },
                     "email": {
                         "type": "string",
-                        "description": "User provided email address spelled by the user. This email must come from the user. Never generate placeholder emails."}
+                        "description": "Email address spelled by the user"
+                    }
                 },
-                "required": ["summary", "start_time_iso", "end_time_iso", "email"]
+                "required": ["summary", "email"],
+                "additionalProperties": False
             }
         }
     }

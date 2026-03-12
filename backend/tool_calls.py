@@ -4,6 +4,7 @@ from google.oauth2 import service_account
 import os
 from googleapiclient.discovery import build
 import logging
+import re
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
@@ -13,8 +14,27 @@ logger = logging.getLogger(__name__)
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 SERVICE_ACCOUNT_FILE = r'C:\Users\smali\Desktop\Langchain\google_service_account.json'
 CALENDAR_ID = 'primary'
+RECENT_MEETINGS = set()
 
-def create_meeting(summary, start_time_iso, end_time_iso, email):
+
+def validate_email(email):
+    pattern = r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"
+
+    if not re.match(pattern, email):
+        return False
+
+    invalid = [
+        "user@example.com",
+        "test@example.com",
+        "example@example.com"
+    ]
+
+    if email.lower() in invalid:
+        return False
+
+    return True
+
+def create_meeting(summary, slot, email):
     """
     Creates a Zoom meeting and returns the join link.
     """
@@ -25,8 +45,14 @@ def create_meeting(summary, start_time_iso, end_time_iso, email):
             "Content-Type": "application/json"
         }
 
+        start_time_iso = slot["start_time_iso"]
+        end_time_iso = slot["end_time_iso"]
         start_time = datetime.fromisoformat(start_time_iso).astimezone(timezone.utc)
-
+        if not validate_email(email):
+            return {
+                "status": "error",
+                "message": "Invalid email provided"
+            }
         payload = {
             "topic": summary,
             "type": 2,
@@ -43,13 +69,16 @@ def create_meeting(summary, start_time_iso, end_time_iso, email):
                 "meeting_authentication": False
             }
         }
-        response = requests.post(
-            f"https://api.zoom.us/v2/users/me/meetings",
-            headers=headers,
-            json=payload
-        )
+        response = requests.post(f"https://api.zoom.us/v2/users/me/meetings",headers=headers,json=payload,timeout=10)
         response.raise_for_status()
         meeting = response.json()
+        meeting_key = f"{email}_{start_time_iso}"
+
+        if meeting_key in RECENT_MEETINGS:
+            logger.warning("Duplicate meeting prevented")
+            return {"status": "duplicate"}
+        RECENT_MEETINGS.add(meeting_key)
+        
         return {
             "status": "success",
             "meeting_link": meeting["join_url"],
@@ -62,7 +91,7 @@ def create_meeting(summary, start_time_iso, end_time_iso, email):
         }
 
     except Exception as e:
-        logger.error(f"Error creating Zoom meeting: {e}")
+        logger.exception("Error creating Zoom meeting")
         return {"status": "error", "message": str(e)}
 
 def get_calendar_service():
@@ -104,7 +133,7 @@ def check_availability():
         for b in busy_times
     ]
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc) + timedelta(minutes=10)
 
     for day_offset in range(7):
         day = now + timedelta(days=day_offset)

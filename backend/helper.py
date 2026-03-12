@@ -22,37 +22,41 @@ now = datetime.now()
 current_date_str = now.strftime("%A, %B %d, %Y")
 client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
 IT_HELPDESK_PROMPT = f"""
-## ROLE
-You are a knowledgeable and concise IT Technician. Your goal is to troubleshoot hardware/system issues or schedule a technician visit if needed.
+You are an IT Helpdesk voice assistant helping users troubleshoot issues or schedule a technician visit.
 
-## CURRENT CONTEXT
-- Today's Date: {current_date_str}
-- Technician Hours: 9:00 AM - 5:00 PM (Mon-Fri)
-- Technician Lunch: 1:00 PM - 2:00 PM (Strictly reserved).
+Today's date: {current_date_str}
+Current Time: {now.strftime("%H:%M:%S")}
 
-## SCHEDULING WORKFLOW (MANDATORY PHASES)
-You must complete each phase in order. Never skip to Phase 3 before Phase 2.
+Technician working hours:
+• Monday–Friday
+• 9:00 AM – 5:00 PM
+• Lunch break: 1:00 PM – 2:00 PM
 
-### PHASE 1: FIND & PROPOSE SLOT
-- Call 'check_availability' (no arguments) to find the first 30-minute gap in the next 7 days.
-- Propose the specific Day, Date, and Time to the user.
-- **WAIT** for the user to explicitly agree (e.g., "Yes," "That works," "Okay").
+Your responsibilities:
+1. Help diagnose simple IT issues.
+2. If a technician visit is required, schedule a 30-minute appointment.
 
-### PHASE 2: THE EMAIL CHALLENGE
-- **ONLY** after the user agrees to the time, you MUST capture their email.
-- You do not know their email. You MUST ask: "To send the invite, could you please spell your email address for me?"
-- Once they spell it, repeat it back (e.g., "I have that as n-a-m-e at gmail dot com, correct?") to verify.
+Guidelines:
+• Be conversational and concise.
+• Keep responses under 20 words.
+• Speak naturally as if talking on the phone.
 
-### PHASE 3: FINAL BOOKING
-- **ONLY** after the user confirms the spelling is correct, call 'create_meeting'.
-- Use the 'start_time_iso' and 'end_time_iso' provided previously by the 'check_availability' tool.
+Scheduling behavior:
+• Use the tool `check_availability` to find the next available technician slot.
+• After proposing a time, wait for the user to confirm before scheduling.
+• Ask the user for their email address to send the meeting invite.
+• Repeat the spelled email back to confirm accuracy.
 
-## RULES
-- RECOVERY: If the user interrupts you, do not skip ahead. Acknowledge what they said, then resume from the exact Phase you were in.
-- NEVER call 'create_meeting' without a verified email from the current conversation.
-- If the user wants to reschedule, reset to PHASE 1.
-- Be conversational but keep responses under 20 words.
-- Always put the user's email in the meeting 'description'.
+Tool usage rules:
+• Never guess or generate an email address.
+• Only use the email address provided by the user.
+• Only call `create_meeting` after the user confirms both:
+  - the proposed time
+  - their email address
+
+General conversation rules:
+• If the user interrupts, acknowledge them and continue naturally.
+• If the user asks unrelated questions, respond briefly then return to troubleshooting or scheduling.
 """
 
 async def cancel_active_response(
@@ -82,7 +86,6 @@ async def run_llm_response(websocket: WebSocket,response_id: int,user_input: str
     """
     state["assistant_speaking"] = True
     state["active_response_id"] = response_id
-
     active_prompt = IT_HELPDESK_PROMPT
     state["is_initial_turn"] = False
     chat_memory.add_message("user", user_input)
@@ -114,8 +117,12 @@ async def run_llm_response(websocket: WebSocket,response_id: int,user_input: str
 
         state["assistant_speaking"] = False
         state["active_response_id"] = None
+        
+        if state.get("meeting_scheduled"):
+            logger.info("Ignoring tool call after meeting booked")
+            return
         if tool_call_chunks:
-            await handle_tool_calls(websocket,response_id,tool_call_chunks,active_prompt,chat_memory)
+            await handle_tool_calls(websocket,response_id,tool_call_chunks,active_prompt,chat_memory,state)
 
     except asyncio.CancelledError:
         logger.warning("🛑 LLM stream cancelled cleanly")
@@ -127,7 +134,7 @@ async def run_llm_response(websocket: WebSocket,response_id: int,user_input: str
         state["assistant_speaking"] = False
         state["active_response_id"] = None
 
-async def handle_tool_calls(websocket: WebSocket,response_id: int,tool_call_chunks: list,active_prompt: str,chat_memory: ChatMemory):
+async def handle_tool_calls(websocket: WebSocket,response_id: int,tool_call_chunks: list,active_prompt: str,chat_memory: ChatMemory,state:dict):
     """
     Executes tools and streams follow-up LLM response.
     """
@@ -145,37 +152,68 @@ async def handle_tool_calls(websocket: WebSocket,response_id: int,tool_call_chun
             }])
 
         if fn_name == "check_availability":
-            logger.info("Executing tool: check_availability")
+            if state["phase"] not in ["diagnosis", "reschedule"]:
+                logger.warning("Blocked check_availability in phase %s", state["phase"])
+                return
             result = check_availability()
-            logger.info("Availability result: %s", result)
+            state["proposed_slot"] = result
+            state["phase"] = "slot_proposed"
 
         elif fn_name == "create_meeting":
-            logger.info("Executing tool: create_meeting")
-            email = args.get("email", "").strip()
-            if not email or "@" not in email:
-                logger.warning("Invalid or missing email provided: %s", email)
-                chat_memory.add_message(role="tool",content="Error: Missing or invalid email.",
-                    tool_call_id=tool_call_id,name=fn_name)
-
-                await websocket.send_json({
-                    "response_id": response_id,
-                    "content": "Could you please spell your email address for me?",
-                    "content_complete": True
-                })
+            # Block duplicate meeting
+            if state.get("meeting_scheduled"):
+                logger.warning("Meeting already scheduled. Blocking duplicate.")
                 return
 
-            logger.info("Creating meeting for email: %s", email)
-            meeting_info = create_meeting(**args)
-            logger.debug("Meeting creation response: %s", meeting_info)
-            if meeting_info["status"] == "success":
-                logger.info(
-                    "Zoom meeting scheduled | meeting_id=%s | link=%s",
-                    meeting_info["meeting_id"],
-                    meeting_info["meeting_link"]
-                )
+            # Ensure a slot was proposed
+            if state.get("proposed_slot") is None:
+                logger.warning("No proposed slot exists.")
+                await websocket.send_json({
+                    "response_id": response_id,
+                    "content": "We need to propose a slot first. Let me find the next available time.",
+                    "content_complete": True
+                })
+                state["phase"] = "reschedule"
+                return
 
+            # If we don't have user email yet, explicitly ask for it
+            if state.get("user_email") is None:
+                logger.info("Asking user for email before scheduling")
+                await websocket.send_json({
+                    "response_id": response_id,
+                    "content": "To send the invite, could you please spell your email address for me?",
+                    "content_complete": True
+                })
+                state["phase"] = "email_pending"
+                return
+
+            # Validate the user-provided email
+            email = state["user_email"].strip()
+            invalid_emails = ["user@example.com","test@example.com","example@example.com"]
+            if not email or "@" not in email or email.lower() in invalid_emails:
+                logger.warning("Invalid or placeholder email provided: %s", email)
+                state["user_email"] = None  # reset to ask again
+                await websocket.send_json({
+                    "response_id": response_id,
+                    "content": "That doesn't look like a valid email. Could you spell it for me again?",
+                    "content_complete": True
+                })
+                state["phase"] = "email_pending"
+                return
+            email = email.replace("-", "").replace(" ", "").lower()
+            # Create the meeting
+            meeting_info = create_meeting(
+                email=email,
+                start_time_iso=state["proposed_slot"]["start_time_iso"],
+                end_time_iso=state["proposed_slot"]["end_time_iso"],
+                summary="IT Helpdesk Meeting"
+            )
+
+            # Update state
+            state["meeting_scheduled"] = True
+            state["phase"] = "meeting_booked"
             result = meeting_info
-
+            logger.info("Meeting successfully scheduled for email %s", email)
         else:
             logger.error("Unknown tool requested: %s", fn_name)
             result = {"error": "Unknown tool"}
