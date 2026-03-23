@@ -37,7 +37,8 @@ async def retell_llm_handler(websocket: WebSocket, call_id: str):
     "proposed_slot": None,
     "user_email": None,
     "email_verified": False,
-    "meeting_scheduled": False
+    "meeting_scheduled": False,
+    "slot_confirmed": False
     }
 
     await websocket.send_json({

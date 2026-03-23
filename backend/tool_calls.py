@@ -5,6 +5,10 @@ import os
 from googleapiclient.discovery import build
 import logging
 import re
+from datetime import timezone
+import pytz
+
+LOCAL_TZ = pytz.timezone("Asia/Karachi")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
@@ -127,14 +131,13 @@ def check_availability():
     busy_times = get_busy_times()
     busy_ranges = [
         (
-            datetime.fromisoformat(b['start']),
-            datetime.fromisoformat(b['end'])
+            datetime.fromisoformat(b['start']).astimezone(LOCAL_TZ),
+            datetime.fromisoformat(b['end']).astimezone(LOCAL_TZ)
         )
         for b in busy_times
     ]
 
-    now = datetime.now(timezone.utc) + timedelta(minutes=10)
-
+    now = datetime.now(LOCAL_TZ) + timedelta(minutes=10)
     for day_offset in range(7):
         day = now + timedelta(days=day_offset)
         if day.weekday() > 4:  # Skip weekends
@@ -144,13 +147,9 @@ def check_availability():
             if hour == 13:  # Skip lunch
                 continue
 
-            start_dt = datetime.combine(
-                day.date(),
-                time(hour, 0),
-                tzinfo=timezone.utc
-            )
-
-            end_dt = start_dt + timedelta(minutes=30)
+            start_dt_utc = datetime.combine(day.date(),time(hour, 0),tzinfo=timezone.utc)
+            start_dt = start_dt_utc.astimezone(LOCAL_TZ)
+            end_dt = (start_dt_utc + timedelta(minutes=30)).astimezone(LOCAL_TZ)
 
             if start_dt < now:
                 continue
@@ -165,9 +164,7 @@ def check_availability():
                 return {
                     "start_time_iso": start_dt.isoformat(),
                     "end_time_iso": end_dt.isoformat(),
-                    "day": start_dt.strftime("%A"),
-                    "date": start_dt.strftime("%B %d, %Y"),
-                    "time": start_dt.strftime("%I:%M %p UTC")
+                    "time": start_dt.strftime("%I:%M %p"),
                 }
 
     return {"error": "No available slots found in next 7 days."}

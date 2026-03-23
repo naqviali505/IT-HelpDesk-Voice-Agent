@@ -4,6 +4,7 @@ import uuid
 import logging
 from fastapi import WebSocket
 from groq import AsyncGroq
+import pytz
 from memory import ChatMemory
 from retell import Retell
 from datetime import datetime
@@ -18,46 +19,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 load_dotenv()
-now = datetime.now()
-current_date_str = now.strftime("%A, %B %d, %Y")
 client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
-IT_HELPDESK_PROMPT = f"""
-You are an IT Helpdesk voice assistant helping users troubleshoot issues or schedule a technician visit.
-
-Today's date: {current_date_str}
-Current Time: {now.strftime("%H:%M:%S")}
-
-Technician working hours:
-• Monday–Friday
-• 9:00 AM – 5:00 PM
-• Lunch break: 1:00 PM – 2:00 PM
-
-Your responsibilities:
-1. Help diagnose simple IT issues.
-2. If a technician visit is required, schedule a 30-minute appointment.
-
-Guidelines:
-• Be conversational and concise.
-• Keep responses under 20 words.
-• Speak naturally as if talking on the phone.
-
-Scheduling behavior:
-• Use the tool `check_availability` to find the next available technician slot.
-• After proposing a time, wait for the user to confirm before scheduling.
-• Ask the user for their email address to send the meeting invite.
-• Repeat the spelled email back to confirm accuracy.
-
-Tool usage rules:
-• Never guess or generate an email address.
-• Only use the email address provided by the user.
-• Only call `create_meeting` after the user confirms both:
-  - the proposed time
-  - their email address
-
-General conversation rules:
-• If the user interrupts, acknowledge them and continue naturally.
-• If the user asks unrelated questions, respond briefly then return to troubleshooting or scheduling.
-"""
 
 async def cancel_active_response(
     websocket: WebSocket,
@@ -83,6 +45,47 @@ async def cancel_active_response(
 async def run_llm_response(websocket: WebSocket,response_id: int,user_input: str,state: dict,chat_memory: ChatMemory):
     """
     Streams LLM output and detects tool calls.
+    """
+    now = datetime.now()
+    current_date_str = now.strftime("%A, %B %d, %Y")
+    IT_HELPDESK_PROMPT = f"""
+    You are an IT Helpdesk voice assistant helping users troubleshoot issues or schedule a technician visit.
+
+    Today's date: {current_date_str}
+    Current Time: {now.strftime("%H:%M:%S")}
+
+    Technician working hours:
+    • Monday–Friday
+    • 9:00 AM – 5:00 PM
+    • Lunch break: 1:00 PM – 2:00 PM
+
+    Your responsibilities:
+    1. Help diagnose simple IT issues.
+    2. If a technician visit is required, schedule a 30-minute appointment.
+    3. Never suggest a time earlier than the current time.
+    4.Only propose future available slots.
+
+    Guidelines:
+    • Be conversational and concise.
+    • Keep responses under 20 words.
+    • Speak naturally as if talking on the phone.
+
+    Scheduling behavior:
+    • Use the tool `check_availability` to find the next available technician slot.
+    • After proposing a time, wait for the user to confirm before scheduling.
+    • Ask the user for their email address to send the meeting invite.
+    • Repeat the spelled email back to confirm accuracy.
+
+    Tool usage rules:
+    • Never guess or generate an email address.
+    • Only use the email address provided by the user.
+    • Only call `create_meeting` after the user confirms both:
+    - the proposed time
+    - their email address
+
+    General conversation rules:
+    • If the user interrupts, acknowledge them and continue naturally.
+    • If the user asks unrelated questions, respond briefly then return to troubleshooting or scheduling.
     """
     state["assistant_speaking"] = True
     state["active_response_id"] = response_id
@@ -122,7 +125,7 @@ async def run_llm_response(websocket: WebSocket,response_id: int,user_input: str
             logger.info("Ignoring tool call after meeting booked")
             return
         if tool_call_chunks:
-            await handle_tool_calls(websocket,response_id,tool_call_chunks,active_prompt,chat_memory,state)
+            await handle_tool_calls(websocket,response_id,tool_call_chunks,active_prompt,chat_memory,state,user_input)
 
     except asyncio.CancelledError:
         logger.warning("🛑 LLM stream cancelled cleanly")
@@ -134,7 +137,7 @@ async def run_llm_response(websocket: WebSocket,response_id: int,user_input: str
         state["assistant_speaking"] = False
         state["active_response_id"] = None
 
-async def handle_tool_calls(websocket: WebSocket,response_id: int,tool_call_chunks: list,active_prompt: str,chat_memory: ChatMemory,state:dict):
+async def handle_tool_calls(websocket: WebSocket,response_id: int,tool_call_chunks: list,active_prompt: str,chat_memory: ChatMemory,state:dict,user_input:str):
     """
     Executes tools and streams follow-up LLM response.
     """
@@ -142,8 +145,7 @@ async def handle_tool_calls(websocket: WebSocket,response_id: int,tool_call_chun
         logger.info("Tool Call Chunks "+str(tool_call_chunks))
         tool_call = tool_call_chunks[0]
         fn_name = tool_call.function.name
-        fn_args_str = "".join(c.function.arguments for c in tool_call_chunks if c.function.arguments)
-        args = json.loads(fn_args_str) if fn_args_str else {}
+        fn_args_str = "".join(c.function.arguments or "" for c in tool_call_chunks)        
         tool_call_id = getattr(tool_call, "id", f"call_{uuid.uuid4()}")
         chat_memory.add_message("assistant",None,tool_calls=[{
                 "id": tool_call_id,
@@ -160,9 +162,18 @@ async def handle_tool_calls(websocket: WebSocket,response_id: int,tool_call_chun
             state["phase"] = "slot_proposed"
 
         elif fn_name == "create_meeting":
-            # Block duplicate meeting
+            if state["phase"] in ["slot_proposed", "email_pending"]:
+                # Treat any email submission as implicit confirmation
+                if state.get("user_email"):
+                    state["slot_confirmed"] = True
+                # Also allow "yes/okay/sure" during slot_proposed phase
+                elif state["phase"] == "slot_proposed" and any(word in user_input.lower() for word in ["yes", "okay", "sure"]):
+                    state["slot_confirmed"] = True
             if state.get("meeting_scheduled"):
                 logger.warning("Meeting already scheduled. Blocking duplicate.")
+                return
+            if not state.get("slot_confirmed"):
+                logger.warning("Blocked create_meeting: slot not confirmed")
                 return
 
             # Ensure a slot was proposed
@@ -176,7 +187,6 @@ async def handle_tool_calls(websocket: WebSocket,response_id: int,tool_call_chun
                 state["phase"] = "reschedule"
                 return
 
-            # If we don't have user email yet, explicitly ask for it
             if state.get("user_email") is None:
                 logger.info("Asking user for email before scheduling")
                 await websocket.send_json({
@@ -202,11 +212,24 @@ async def handle_tool_calls(websocket: WebSocket,response_id: int,tool_call_chun
                 return
             email = email.replace("-", "").replace(" ", "").lower()
             # Create the meeting
+            LOCAL_TZ = pytz.timezone("Asia/Karachi")
+            slot_time = datetime.fromisoformat(state["proposed_slot"]["start_time_iso"])
+            if slot_time <= datetime.now(LOCAL_TZ):
+                logger.error("Attempted to book past slot")
+                await websocket.send_json({
+                    "response_id": response_id,
+                    "content": "That time just passed. Let me find the next available slot.",
+                    "content_complete": True
+                })
+
+                state["phase"] = "reschedule"
+                state["proposed_slot"] = None
+                return
+            
             meeting_info = create_meeting(
-                email=email,
-                start_time_iso=state["proposed_slot"]["start_time_iso"],
-                end_time_iso=state["proposed_slot"]["end_time_iso"],
-                summary="IT Helpdesk Meeting"
+                summary="IT Helpdesk Meeting",
+                slot=state["proposed_slot"],
+                email=email
             )
 
             # Update state
