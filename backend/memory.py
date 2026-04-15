@@ -11,15 +11,19 @@ class ChatMemory:
         message = {"role": role, "content": content}
         message.update(kwargs)
         self.history.append(message)
-        
-        # Keep only the most recent messages
+
         while len(self.history) > self.limit:
             removed = self.history.pop(0)
-
-            # If we removed a tool message, remove the next one too
             if removed.get("role") == "assistant" and removed.get("tool_calls"):
-                if self.history and self.history[0].get("role") == "tool":
-                    self.history.pop(0)
+                tool_ids = {tc["id"] for tc in removed.get("tool_calls", [])}
+
+                self.history = [
+                    msg for msg in self.history
+                    if not (
+                        msg.get("role") == "tool" and
+                        msg.get("tool_call_id") in tool_ids
+                    )
+                ]
 
     def get_messages(self):
         return list(self.history)

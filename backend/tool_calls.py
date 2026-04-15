@@ -76,6 +76,7 @@ def create_meeting(summary, slot, email):
         response = requests.post(f"https://api.zoom.us/v2/users/me/meetings",headers=headers,json=payload,timeout=10)
         response.raise_for_status()
         meeting = response.json()
+        logger.warning(meeting)
         meeting_key = f"{email}_{start_time_iso}"
 
         if meeting_key in RECENT_MEETINGS:
