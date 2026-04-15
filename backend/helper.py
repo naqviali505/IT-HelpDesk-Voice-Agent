@@ -22,27 +22,6 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
 
-async def cancel_active_response(
-    websocket: WebSocket,
-    state: dict
-):
-    """
-    Cancels any active assistant speech + LLM stream.
-    """
-    if state["assistant_speaking"] and state["active_response_id"]:
-        logger.info("🔴 Barge-in detected → cancelling assistant response")
-        await websocket.send_json({
-            "type": "response_cancel",
-            "response_id": state["active_response_id"]
-        })
-
-    if state["active_stream_task"]:
-        state["active_stream_task"].cancel()
-
-    state["assistant_speaking"] = False
-    state["active_response_id"] = None
-    state["active_stream_task"] = None
-
 async def run_llm_response(websocket: WebSocket,response_id: int,user_input: str,state: dict,chat_memory: ChatMemory):
     """
     Streams LLM output and detects tool calls.
@@ -84,6 +63,10 @@ async def run_llm_response(websocket: WebSocket,response_id: int,user_input: str
     - the proposed time
     - their email address
 
+    CRITICAL TOOL USAGE RULE:
+    - Only use check_availability when the user explicitly requests scheduling, booking, or technician help.
+    - Do NOT use tools for general conversation, greetings, or troubleshooting questions.
+
     General conversation rules:
     • If the user interrupts, acknowledge them and continue naturally.
     • If the user asks unrelated questions, respond briefly then return to troubleshooting or scheduling.
@@ -119,7 +102,14 @@ async def run_llm_response(websocket: WebSocket,response_id: int,user_input: str
                     "content": delta.content,
                     "content_complete": False
                 })
-
+            ALLOWED_TOOL_CONTEXTS = ["schedule", "booking", "appointment"]
+            def is_tool_allowed(user_input: str):
+                return any(x in user_input.lower() for x in ALLOWED_TOOL_CONTEXTS)
+            
+            if not is_tool_allowed(user_input):
+                logger.warning("Blocked tool execution due to irrelevant context")
+                return
+            
             if delta.tool_calls:
                 for tc in delta.tool_calls:
                     tc_id = tc.id or "default"
@@ -179,9 +169,13 @@ async def handle_tool_calls(websocket: WebSocket,response_id: int,tool_calls: di
             tool_executed = True
             fn_name = tc["name"]
             fn_args_str = tc["arguments"]
-            args = json.loads(fn_args_str or "{}")
+            try:
+                parsed = json.loads(fn_args_str or "{}")
+                args = parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                args = {}            
+            
             result = None
-
             if fn_name == "check_availability":
                 result = check_availability()
                 state["proposed_slot"] = result

@@ -64,11 +64,8 @@ async def retell_llm_handler(websocket: WebSocket, call_id: str):
                 
                 response_id = data["response_id"]
                 logger.info(f"User: {user_input}")
-                await cancel_active_response(websocket, state)
-                await asyncio.sleep(0.2)
                 
                 if state["phase"] == "slot_proposed":
-                    # Check if user rejects the proposed slot
                     if any(neg in user_input.lower() for neg in ["no", "not", "later", "different", "another"]):
                         logger.info("User wants to reschedule → flipping phase to 'reschedule'")
                         state["phase"] = "reschedule"
