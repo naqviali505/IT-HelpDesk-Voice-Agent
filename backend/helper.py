@@ -71,10 +71,17 @@ async def run_llm_response(websocket: WebSocket,response_id: int,user_input: str
     • If the user interrupts, acknowledge them and continue naturally.
     • If the user asks unrelated questions, respond briefly then return to troubleshooting or scheduling.
     """
+    if state.get("active_turn") and state["active_turn"] != response_id:
+        return
+    state["active_turn"] = response_id
+
     state["assistant_speaking"] = True
     state["active_response_id"] = response_id
     active_prompt = IT_HELPDESK_PROMPT
     state["is_initial_turn"] = False
+    
+
+    state["active_turn"] = response_id
     
     email_match = re.search(r"[\w\.-]+@[\w\.-]+", user_input)
     if email_match:
@@ -96,19 +103,14 @@ async def run_llm_response(websocket: WebSocket,response_id: int,user_input: str
                 break
             delta = chunk.choices[0].delta
             if delta.content:
+                if state["active_response_id"] != response_id:
+                    return
                 full_response += delta.content
                 await websocket.send_json({
                     "response_id": response_id,
                     "content": delta.content,
                     "content_complete": False
                 })
-            ALLOWED_TOOL_CONTEXTS = ["schedule", "booking", "appointment"]
-            def is_tool_allowed(user_input: str):
-                return any(x in user_input.lower() for x in ALLOWED_TOOL_CONTEXTS)
-            
-            if not is_tool_allowed(user_input):
-                logger.warning("Blocked tool execution due to irrelevant context")
-                return
             
             if delta.tool_calls:
                 for tc in delta.tool_calls:
@@ -143,11 +145,10 @@ async def run_llm_response(websocket: WebSocket,response_id: int,user_input: str
             return
         if tool_calls:
             await handle_tool_calls(websocket,response_id,tool_calls,active_prompt,chat_memory,state,user_input)
-        else:
-            chat_memory.add_message("assistant", full_response)
     
     except asyncio.CancelledError:
         logger.warning("🛑 LLM stream cancelled cleanly")
+        return
 
     except Exception as e:
         logger.error(f"LLM error: {e}")
@@ -155,6 +156,7 @@ async def run_llm_response(websocket: WebSocket,response_id: int,user_input: str
     finally:
         state["assistant_speaking"] = False
         state["active_response_id"] = None
+        state["active_turn"] = None
 
 async def handle_tool_calls(websocket: WebSocket,response_id: int,tool_calls: dict,active_prompt: str,chat_memory: ChatMemory,state:dict,user_input:str):
     """

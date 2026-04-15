@@ -4,7 +4,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from memory import ChatMemory
-from helper import cancel_active_response,run_llm_response,get_retell
+from helper import run_llm_response,get_retell
 load_dotenv()
 logging.basicConfig(
     level=logging.INFO,
@@ -38,7 +38,8 @@ async def retell_llm_handler(websocket: WebSocket, call_id: str):
         "user_email": None,
         "email_verified": False,
         "meeting_scheduled": False,
-        "slot_confirmed": False
+        "slot_confirmed": False,
+        "active_turn":False
     }
 
     await websocket.send_json({
